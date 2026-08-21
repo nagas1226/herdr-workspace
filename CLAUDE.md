@@ -60,18 +60,24 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+cargo test
+cargo build --release
+mkdir -p bin && cp -f target/release/herdr-workspace bin/
+herdr plugin link "$PWD"
 ```
+
+Bind `herdr-workspace.open` in `~/.config/herdr/config.toml` (`type = "plugin_action"`), then `herdr server reload-config`.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+- `open` action (no TTY) opens the centered `form` popup pane.
+- `form` is a ratatui wizard: directory (live completions) → name → profile cards → cancel/save.
+- Profiles live in `$HERDR_PLUGIN_CONFIG_DIR/config.yaml` (seeded from `config.example.yaml`). Schema and how to write them: `docs/profiles.md`.
+- Save: `herdr workspace create`, then tab/pane split/rename, `pane run` or `agent start` from the selected profile.
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- Call Herdr through `$HERDR_BIN_PATH` (`src/herdr.rs`).
+- Use `bd` for task tracking. Conventional commits; changelog via `scripts/changelog.sh` (git-cliff).
+- Releases: push a `v*` tag; GitHub Actions uploads musl/macOS binaries; `herdr/install.sh` downloads them.

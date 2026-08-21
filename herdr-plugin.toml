@@ -1,0 +1,42 @@
+# herdr-plugin.toml — create a workspace and apply a layout profile.
+#
+# Action `herdr-workspace.open` runs on the herdr server with no TTY and opens
+# the centered `form` popup. The popup is a real terminal: a ratatui form for
+# directory, name, and profile cards, then Cancel / Save.
+
+id = "herdr-workspace"
+name = "Herdr Workspace"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Create a workspace from a centered popup and apply a configured layout profile (tabs, pane splits, names, startup commands)."
+platforms = ["linux", "macos"]
+
+# On `herdr plugin install`, download the prebuilt binary for this platform
+# from the matching GitHub Release into bin/. Skipped by `herdr plugin link`.
+[[build]]
+command = ["bash", "herdr/install.sh"]
+
+# User-facing entry point, qualified as `herdr-workspace.open`.
+[[actions]]
+id = "open"
+title = "New workspace from layout profile"
+contexts = ["workspace"]
+command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-workspace\" open"]
+
+# Centered modal form. herdr actions have no TTY; this pane does.
+[[panes]]
+id = "form"
+title = "New workspace"
+placement = "popup"
+width = "70%"
+height = "48%"
+command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-workspace\" form"]
+
+# herdr does NOT bind keys declared in a plugin manifest. Bind a key in
+# ~/.config/herdr/config.toml, then `herdr server reload-config`:
+#
+#   [[keys.command]]
+#   key = "prefix+shift+n"
+#   type = "plugin_action"
+#   command = "herdr-workspace.open"
+#   description = "New workspace from layout profile"

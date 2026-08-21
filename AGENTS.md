@@ -13,6 +13,17 @@ This project uses **bd** (beads) for issue tracking. Run `bd prime` for full wor
 > source of truth; don't `bd import` during normal operation; don't
 > reach for third-party Dolt hosting before trying the default).
 
+## Plugin
+
+Rust Herdr plugin. `herdr-workspace.open` opens a centered popup form; Save creates a workspace and applies a layout profile from `$HERDR_PLUGIN_CONFIG_DIR/config.yaml`. Profile YAML: [docs/profiles.md](docs/profiles.md).
+
+```bash
+cargo test
+cargo build --release
+mkdir -p bin && cp -f target/release/herdr-workspace bin/
+herdr plugin link "$PWD"
+```
+
 ## Quick Reference
 
 ```bash
