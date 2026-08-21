@@ -86,7 +86,7 @@ pub fn apply_with<R: Runner>(
                 req(&created_tab, &["result", "root_pane", "pane_id"])?,
             )
         };
-        apply_tab(runner, tab, &tab_id, &root, cwd, &mut agent_starts)?;
+        apply_tab(runner, tab, &tab_id, &root, cwd, name, &mut agent_starts)?;
     }
 
     runner.json(&vec!["workspace".into(), "focus".into(), workspace_id.clone()])?;
@@ -102,6 +102,7 @@ fn apply_tab<R: Runner>(
     _tab_id: &str,
     root: &str,
     cwd: &str,
+    workspace_name: &str,
     agent_starts: &mut Vec<Vec<String>>,
 ) -> Result<(), String> {
     let mut ids: HashMap<String, String> = HashMap::new();
@@ -132,7 +133,7 @@ fn apply_tab<R: Runner>(
             let mut args = vec![
                 "agent".into(),
                 "start".into(),
-                agent.to_string(),
+                prefixed_agent_name(workspace_name, agent),
                 "--kind".into(),
                 kind.to_string(),
                 "--pane".into(),
@@ -140,7 +141,7 @@ fn apply_tab<R: Runner>(
             ];
             if !pane.args.is_empty() {
                 args.push("--".into());
-                args.extend(pane.args.clone());
+                args.extend(pane.args.iter().map(|a| unquote_arg(a)));
             }
             agent_starts.push(args);
         } else if let Some(cmd) = pane.command.as_deref().filter(|s| !s.is_empty()) {
@@ -186,6 +187,90 @@ fn split_pane<R: Runner>(
 
 fn req(v: &Value, keys: &[&str]) -> Result<String, String> {
     herdr::str_of(v, keys).ok_or_else(|| format!("missing {}", keys.join(".")))
+}
+
+/// Live Herdr names are unique in the session, not per workspace.
+/// Prefix the profile role with a slug of the workspace label.
+/// `{slug}-{role}`, truncated to 32 chars, matching `[a-z][a-z0-9_-]{0,31}`.
+fn prefixed_agent_name(workspace: &str, agent: &str) -> String {
+    let slug = workspace_slug(workspace);
+    if slug.is_empty() {
+        return truncate_agent(agent, 32);
+    }
+    let max = 32usize;
+    if slug.len() + 1 + agent.len() <= max {
+        return format!("{slug}-{agent}");
+    }
+    let role = truncate_agent(agent, (max - 2).min(agent.len()).max(1));
+    let room = max.saturating_sub(1 + role.len());
+    let mut stem = slug.chars().take(room).collect::<String>();
+    while stem.ends_with('-') {
+        stem.pop();
+    }
+    if stem.is_empty() {
+        stem.push('w');
+    }
+    format!("{stem}-{role}")
+}
+
+fn workspace_slug(name: &str) -> String {
+    let mut out = String::new();
+    let mut dash = false;
+    for c in name.chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            out.push(c);
+            dash = false;
+        } else if !out.is_empty() && !dash {
+            out.push('-');
+            dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        out.insert(0, 'w');
+    }
+    if out.is_empty() {
+        return "ws".into();
+    }
+    if !out.chars().next().unwrap().is_ascii_lowercase() {
+        out.insert(0, 'w');
+    }
+    out
+}
+
+fn truncate_agent(agent: &str, max: usize) -> String {
+    let mut s: String = agent.chars().take(max).collect();
+    while s.ends_with('-') {
+        s.pop();
+    }
+    if s.is_empty() {
+        "a".into()
+    } else {
+        s
+    }
+}
+
+/// YAML `-c key="value"` must become CLI `key=value`. `trim_matches('"')`
+/// also eats a trailing quote on `key="value"`, which is worse.
+fn unquote_arg(raw: &str) -> String {
+    let s = raw.trim();
+    if let Some((k, v)) = s.split_once('=') {
+        let v = unwrap_quotes(v.trim());
+        return format!("{k}={v}");
+    }
+    unwrap_quotes(s).to_string()
+}
+
+fn unwrap_quotes(s: &str) -> &str {
+    let b = s.as_bytes();
+    if b.len() >= 2 && b[0] == b'"' && b[b.len() - 1] == b'"' {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
 }
 
 #[cfg(test)]
@@ -280,7 +365,7 @@ mod tests {
         assert_eq!(result.agent_starts.len(), 1);
         assert_eq!(
             result.agent_starts[0][..6],
-            ["agent", "start", "pair", "--kind", "claude", "--pane"]
+            ["agent", "start", "demo-pair", "--kind", "claude", "--pane"]
         );
         assert!(joined.iter().any(|c| c == "workspace focus w1"));
         assert_eq!(fake.splits, 1);
@@ -338,16 +423,91 @@ profiles:
         let starts: Vec<String> = result.agent_starts.iter().map(|c| c.join(" ")).collect();
         assert!(
             starts.iter().any(|c| c.contains(
-                "agent start worker --kind codex --pane w1:p1 -- -m gpt-5.6-luna -c model_reasoning_effort=\"medium\""
+                "agent start demo-worker --kind codex --pane w1:p1 -- -m gpt-5.6-luna -c model_reasoning_effort=medium"
             )),
             "{starts:?}"
         );
         assert!(
             starts
                 .iter()
-                .any(|c| c.contains("agent start builder --kind grok --pane")),
+                .any(|c| c.contains("agent start demo-builder --kind grok --pane")),
             "{starts:?}"
         );
+    }
+
+    #[test]
+    fn team_profile_queues_every_named_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = parse_yaml(include_str!(
+            "../tests/fixtures/team.yaml"
+        ))
+        .unwrap()
+        .profiles
+        .remove(0);
+        let mut fake = Fake::new();
+        let result = apply_with(&mut fake, dir.path().to_str().unwrap(), "demo", &profile).unwrap();
+        let names: Vec<&str> = result
+            .agent_starts
+            .iter()
+            .map(|c| c[2].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "demo-leader",
+                "demo-frontend-builder",
+                "demo-background-builder",
+                "demo-reviewer",
+                "demo-research-left",
+                "demo-research-right",
+            ]
+        );
+        let frontend = result
+            .agent_starts
+            .iter()
+            .find(|c| c[2] == "demo-frontend-builder")
+            .unwrap();
+        assert!(frontend.iter().any(|a| a == "-m"));
+        assert!(frontend.iter().any(|a| a == "gpt-5.6-luna"));
+        assert!(frontend.iter().any(|a| a == "model_reasoning_effort=high"));
+        assert!(!frontend.iter().any(|a| a.contains('"')));
+    }
+
+    #[test]
+    fn prefixed_agent_name_slugs_workspace_label() {
+        assert_eq!(prefixed_agent_name("capehorn-next", "reviewer"), "capehorn-next-reviewer");
+        assert_eq!(prefixed_agent_name("Capehorn Next", "frontend-builder"), "capehorn-next-frontend-builder");
+        assert_eq!(prefixed_agent_name("telemetry-replay", "reviewer"), "telemetry-replay-reviewer");
+        let long = prefixed_agent_name("telemetry-replay", "frontend-builder");
+        assert!(long.len() <= 32, "{long}");
+        assert!(long.starts_with("telemetry-"));
+        assert!(long.contains("frontend"));
+        assert!(long.chars().next().unwrap().is_ascii_lowercase());
+        assert!(!long.ends_with('-'));
+        for (ws, role) in [
+            ("capehorn-next", "leader"),
+            ("capehorn-next", "frontend-builder"),
+            ("capehorn-next", "background-builder"),
+            ("capehorn-next", "reviewer"),
+            ("capehorn-next", "research-left"),
+            ("capehorn-next", "research-right"),
+        ] {
+            let n = prefixed_agent_name(ws, role);
+            assert!(n.len() <= 32, "{n}");
+            assert!(n.starts_with("capehorn-next-"), "{n}");
+            assert!(n.ends_with(role) || n.contains("frontend") || n.contains("background"), "{n}");
+        }
+        assert_eq!(
+            prefixed_agent_name("capehorn-next", "reviewer"),
+            "capehorn-next-reviewer"
+        );
+    }
+
+    #[test]
+    fn unquote_arg_strips_wrapped_value_not_trailing_quote() {
+        assert_eq!(unquote_arg(r#"model_reasoning_effort="high""#), "model_reasoning_effort=high");
+        assert_eq!(unquote_arg("-m"), "-m");
+        assert_eq!(unquote_arg(r#""gpt-5.6-luna""#), "gpt-5.6-luna");
     }
 
     #[test]

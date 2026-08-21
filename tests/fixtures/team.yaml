@@ -1,0 +1,82 @@
+profiles:
+  - id: team
+    name: Team
+    description: |
+      Five tabs: agents, dev server, build, review, research.
+    tabs:
+      - name: agents
+        panes:
+          - id: leader
+            name: leader
+            agent: leader
+            kind: codex
+
+      - name: dev server
+        panes:
+          - id: left
+            name: left
+          - id: right
+            name: right
+            split_from: left
+            direction: right
+            ratio: 0.5
+
+      - name: build
+        panes:
+          - id: frontend
+            name: frontend builder
+            agent: frontend-builder
+            kind: codex
+            args:
+              - -m
+              - gpt-5.6-luna
+              - -c
+              - model_reasoning_effort=high
+          - id: background
+            name: background builder
+            agent: background-builder
+            kind: codex
+            split_from: frontend
+            direction: right
+            ratio: 0.5
+            args:
+              - -m
+              - gpt-5.6-luna
+              - -c
+              - model_reasoning_effort=high
+
+      - name: review
+        panes:
+          - id: reviewer
+            name: reviewer
+            agent: reviewer
+            kind: codex
+            args:
+              - -m
+              - gpt-5.6-sol
+              - -c
+              - model_reasoning_effort=high
+
+      - name: research
+        panes:
+          - id: left
+            name: research-left
+            agent: research-left
+            kind: codex
+            args:
+              - -m
+              - gpt-5.6-sol
+              - -c
+              - model_reasoning_effort=high
+          - id: right
+            name: research-right
+            agent: research-right
+            kind: codex
+            split_from: left
+            direction: right
+            ratio: 0.5
+            args:
+              - -m
+              - gpt-5.6-sol
+              - -c
+              - model_reasoning_effort=high

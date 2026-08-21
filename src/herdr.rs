@@ -1,7 +1,7 @@
 //! Thin wrapper around the `herdr` CLI via `$HERDR_BIN_PATH`.
 
 use std::ffi::OsStr;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 
 pub fn bin() -> String {
     std::env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".to_string())
@@ -16,27 +16,6 @@ where
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("herdr-workspace: failed to spawn herdr CLI {}: {e}", bin()))
-}
-
-/// Fire-and-forget a herdr CLI command. Used for `agent start` after the
-/// popup is already closed so a 30s readiness wait cannot hold the form.
-pub fn spawn<I, S>(args: I) -> Result<(), String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let mut cmd = Command::new(bin());
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    cmd.spawn().map_err(|e| format!("spawn herdr: {e}"))?;
-    Ok(())
 }
 
 pub fn json<I, S>(args: I) -> Result<serde_json::Value, String>
@@ -65,17 +44,21 @@ where
 }
 
 pub fn popup_busy(stderr: &str) -> bool {
-    let trimmed = stderr.trim();
-    if trimmed.contains("popup already open") || trimmed.contains("ui_busy") {
-        return true;
-    }
-    serde_json::from_str::<serde_json::Value>(trimmed)
+    matches_error(stderr, "ui_busy")
+        || stderr.contains("popup already open")
+        || stderr.contains("ui_busy")
+}
+
+pub fn agent_name_taken(stderr: &str) -> bool {
+    matches_error(stderr, "agent_name_taken") || stderr.contains("agent_name_taken")
+}
+
+fn matches_error(stderr: &str, code: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(stderr.trim())
         .ok()
         .and_then(|v| {
             let err = v.get("error")?;
-            let code = err.get("code").and_then(|c| c.as_str()).unwrap_or("");
-            let msg = err.get("message").and_then(|c| c.as_str()).unwrap_or("");
-            Some(code == "ui_busy" || msg.contains("popup already open") || msg.contains("ui_busy"))
+            err.get("code").and_then(|c| c.as_str()).map(|c| c == code)
         })
         .unwrap_or(false)
 }
@@ -105,5 +88,12 @@ mod tests {
     fn detects_ui_busy() {
         assert!(popup_busy(r#"{"error":{"code":"ui_busy","message":"settings open"}}"#));
         assert!(!popup_busy(r#"{"error":{"code":"plugin_not_found","message":"nope"}}"#));
+    }
+
+    #[test]
+    fn detects_agent_name_taken() {
+        let stderr = r#"{"error":{"code":"agent_name_taken","message":"agent name reviewer is already used"},"id":"cli:agent:start"}"#;
+        assert!(agent_name_taken(stderr));
+        assert!(!agent_name_taken(r#"{"error":{"code":"ui_busy","message":"x"}}"#));
     }
 }

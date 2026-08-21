@@ -157,17 +157,29 @@ A pane is one of three things:
    closes, the plugin runs:
 
    ```bash
-   herdr agent start <agent> --kind <kind> --pane <pane-id> -- <args...>
+   herdr agent start <workspace-slug>-<agent> --kind <kind> --pane <pane-id> -- <args...>
    ```
 
-   Herdr then tracks that occupant as `<agent>` (`herdr agent prompt worker`,
-   `herdr agent list`, …).
+   Herdr agent names are unique among **live** agents in the session, not
+   per workspace. The plugin prefixes the profile `agent` with a slug of
+   the workspace name (`Capehorn Next` → `capehorn-next-reviewer`) so two
+   Team workspaces can keep the same role names. Pane `name` is unchanged
+   (sidebar label stays `reviewer`). The live target is the prefixed name:
+
+   ```bash
+   herdr agent prompt capehorn-next-reviewer "…"
+   ```
+
+   The slug is `[a-z0-9-]` from the workspace label; the full name is
+   truncated to 32 characters. If that name is still taken, the plugin
+   retries `…-2`, `…-3`, …
 
 Do **not** set both `command` and `agent`. If you need flags for Codex or
 Grok, put them in `args`, not in `command`.
 
-`agent` must match `[a-z][a-z0-9_-]{0,31}` and be unique among **live**
-agents in the session. `kind` must be a Herdr-supported kind, for example:
+Profile `agent` must match `[a-z][a-z0-9_-]{0,31}`. That is the role
+name; the live Herdr name is `{workspace-slug}-{agent}`. `kind` must be a
+Herdr-supported kind, for example:
 
 `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`,
 `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`,
@@ -253,11 +265,11 @@ For the chosen directory, workspace name, and profile:
           kind: grok
 ```
 
-That last profile starts:
+That last profile, saved as workspace `demo`, starts:
 
 ```bash
-herdr agent start worker --kind codex --pane <id> -- -m gpt-5.6-luna -c model_reasoning_effort="medium"
-herdr agent start builder --kind grok --pane <id>
+herdr agent start demo-worker --kind codex --pane <id> -- -m gpt-5.6-luna -c model_reasoning_effort="medium"
+herdr agent start demo-builder --kind grok --pane <id>
 ```
 
 ### Shell command (not an agent)

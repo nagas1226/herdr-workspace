@@ -326,6 +326,41 @@ mod tests {
     }
 
     #[test]
+    fn team_fixture_parses_six_agents() {
+        let cfg = parse_yaml(include_str!("../tests/fixtures/team.yaml")).expect("team yaml");
+        assert_eq!(cfg.profiles.len(), 1);
+        let agents: Vec<_> = cfg.profiles[0]
+            .tabs
+            .iter()
+            .flat_map(|t| t.panes.iter())
+            .filter_map(|p| p.agent.as_deref())
+            .collect();
+        assert_eq!(
+            agents,
+            [
+                "leader",
+                "frontend-builder",
+                "background-builder",
+                "reviewer",
+                "research-left",
+                "research-right",
+            ]
+        );
+        let build = &cfg.profiles[0].tabs[2];
+        assert_eq!(build.name, "build");
+        assert_eq!(build.panes[0].kind.as_deref(), Some("codex"));
+        assert_eq!(
+            build.panes[0].args,
+            vec!["-m", "gpt-5.6-luna", "-c", "model_reasoning_effort=high"]
+        );
+        assert_eq!(cfg.profiles[0].tabs[3].name, "review");
+        assert_eq!(
+            cfg.profiles[0].tabs[3].panes[0].agent.as_deref(),
+            Some("reviewer")
+        );
+    }
+
+    #[test]
     fn rejects_agent_without_kind() {
         let raw = r#"
 profiles:
@@ -436,6 +471,37 @@ profiles:
         assert_eq!(
             cfg.profiles[0].tabs[0].panes[0].command.as_deref(),
             Some("printf 'hi'")
+        );
+    }
+
+    #[test]
+    fn team_style_args_keep_leading_dashes() {
+        let raw = r#"
+profiles:
+  - id: team
+    name: Team
+    tabs:
+      - name: build
+        panes:
+          - id: frontend
+            agent: frontend-builder
+            kind: codex
+            args:
+              - -m
+              - gpt-5.6-luna
+              - -c
+              - model_reasoning_effort="high"
+"#;
+        let cfg = parse_yaml(raw).expect("team yaml");
+        let pane = &cfg.profiles[0].tabs[0].panes[0];
+        assert_eq!(
+            pane.args,
+            vec![
+                "-m".to_string(),
+                "gpt-5.6-luna".to_string(),
+                "-c".to_string(),
+                "model_reasoning_effort=\"high\"".to_string(),
+            ]
         );
     }
 
