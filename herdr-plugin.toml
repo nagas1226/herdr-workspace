@@ -6,7 +6,7 @@
 
 id = "herdr-workspace"
 name = "Herdr Workspace"
-version = "0.1.1"
+version = "0.1.2"
 min_herdr_version = "0.8.0"
 description = "Create a workspace or Git worktree from a centered popup and apply a configured layout profile (tabs, pane splits, names, startup commands)."
 platforms = ["linux", "macos"]

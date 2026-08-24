@@ -1,6 +1,6 @@
 [package]
 name = "herdr-workspace"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Herdr plugin: create a workspace and apply a layout profile from a centered popup."
 license = "MIT"
