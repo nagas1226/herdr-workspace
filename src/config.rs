@@ -326,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn team_fixture_parses_six_agents() {
+    fn team_fixture_parses_seven_agents() {
         let cfg = parse_yaml(include_str!("../tests/fixtures/team.yaml")).expect("team yaml");
         assert_eq!(cfg.profiles.len(), 1);
         let agents: Vec<_> = cfg.profiles[0]
@@ -344,6 +344,7 @@ mod tests {
                 "reviewer",
                 "research-left",
                 "research-right",
+                "qa",
             ]
         );
         let build = &cfg.profiles[0].tabs[2];
@@ -357,6 +358,14 @@ mod tests {
         assert_eq!(
             cfg.profiles[0].tabs[3].panes[0].agent.as_deref(),
             Some("reviewer")
+        );
+        let test = &cfg.profiles[0].tabs[5];
+        assert_eq!(test.name, "test");
+        assert_eq!(test.panes[0].agent.as_deref(), Some("qa"));
+        assert_eq!(test.panes[0].name.as_deref(), Some("QA"));
+        assert_eq!(
+            test.panes[0].args,
+            vec!["-m", "gpt-5.6-luna", "-c", "model_reasoning_effort=medium"]
         );
     }
 

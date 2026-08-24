@@ -460,6 +460,7 @@ profiles:
                 "demo-reviewer",
                 "demo-research-left",
                 "demo-research-right",
+                "demo-qa",
             ]
         );
         let frontend = result
@@ -471,6 +472,13 @@ profiles:
         assert!(frontend.iter().any(|a| a == "gpt-5.6-luna"));
         assert!(frontend.iter().any(|a| a == "model_reasoning_effort=high"));
         assert!(!frontend.iter().any(|a| a.contains('"')));
+        let qa = result
+            .agent_starts
+            .iter()
+            .find(|c| c[2] == "demo-qa")
+            .unwrap();
+        assert!(qa.iter().any(|a| a == "gpt-5.6-luna"));
+        assert!(qa.iter().any(|a| a == "model_reasoning_effort=medium"));
     }
 
     #[test]
@@ -491,6 +499,7 @@ profiles:
             ("capehorn-next", "reviewer"),
             ("capehorn-next", "research-left"),
             ("capehorn-next", "research-right"),
+            ("capehorn-next", "qa"),
         ] {
             let n = prefixed_agent_name(ws, role);
             assert!(n.len() <= 32, "{n}");

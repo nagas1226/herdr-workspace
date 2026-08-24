@@ -2,7 +2,7 @@ profiles:
   - id: team
     name: Team
     description: |
-      Five tabs: agents, dev server, build, review, research.
+      Six tabs: agents, dev server, build, review, research, test.
     tabs:
       - name: agents
         panes:
@@ -80,3 +80,15 @@ profiles:
               - gpt-5.6-sol
               - -c
               - model_reasoning_effort=high
+
+      - name: test
+        panes:
+          - id: qa
+            name: QA
+            agent: qa
+            kind: codex
+            args:
+              - -m
+              - gpt-5.6-luna
+              - -c
+              - model_reasoning_effort=medium
