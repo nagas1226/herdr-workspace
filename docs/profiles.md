@@ -3,8 +3,9 @@
 A **profile** is a reusable Herdr workspace layout: tabs, pane splits, pane
 labels, optional shell commands, and optional named coding agents.
 
-The New workspace popup lists one card per profile. Save creates a workspace
-in the chosen directory and applies that profile.
+The New workspace and New worktree popups list one card per profile. Save
+creates a workspace (or a Git worktree of the current workspace) and applies
+that profile.
 
 ## Where the file lives
 
@@ -202,6 +203,12 @@ For the chosen directory, workspace name, and profile:
 5. Close the popup
 6. For each named agent: spawn `herdr agent start …` in the background
 7. `herdr workspace focus` on the new workspace
+
+The worktree popup is the same from step 2, but step 1 is:
+
+1. Resolve the latest `base` (`git fetch`, prefer `origin/<name>` when it exists)
+2. `herdr worktree create --workspace <current> --branch <name> --base <ref> --label <name> --focus`
+3. Fast-forward the new checkout onto that base (`git merge --ff-only`)
 
 ## Recipes
 

@@ -15,7 +15,7 @@ This project uses **bd** (beads) for issue tracking. Run `bd prime` for full wor
 
 ## Plugin
 
-Rust Herdr plugin. `herdr-workspace.open` opens a centered popup form; Save creates a workspace and applies a layout profile from `$HERDR_PLUGIN_CONFIG_DIR/config.yaml`. Profile YAML: [docs/profiles.md](docs/profiles.md).
+Rust Herdr plugin. `herdr-workspace.open` opens a centered popup form; Save creates a workspace and applies a layout profile from `$HERDR_PLUGIN_CONFIG_DIR/config.yaml`. `herdr-workspace.worktree` does the same for a Git worktree of the current workspace (branch, fuzzy base ref, profile). Profile YAML: [docs/profiles.md](docs/profiles.md).
 
 ```bash
 cargo test

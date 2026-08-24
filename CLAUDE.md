@@ -67,14 +67,16 @@ mkdir -p bin && cp -f target/release/herdr-workspace bin/
 herdr plugin link "$PWD"
 ```
 
-Bind `herdr-workspace.open` in `~/.config/herdr/config.toml` (`type = "plugin_action"`), then `herdr server reload-config`.
+Bind `herdr-workspace.open` and `herdr-workspace.worktree` in `~/.config/herdr/config.toml` (`type = "plugin_action"`), then `herdr server reload-config`.
 
 ## Architecture Overview
 
 - `open` action (no TTY) opens the centered `form` popup pane.
+- `worktree` action (no TTY) opens the centered `worktree` popup pane on the current git workspace.
 - `form` is a ratatui wizard: directory (live completions) → name → profile cards → cancel/save.
+- `worktree` form: branch → base ref (fuzzy git refs) → profile cards → cancel/save.
 - Profiles live in `$HERDR_PLUGIN_CONFIG_DIR/config.yaml` (seeded from `config.example.yaml`). Schema and how to write them: `docs/profiles.md`.
-- Save: `herdr workspace create`, then tab/pane split/rename, `pane run` or `agent start` from the selected profile.
+- Save: `herdr workspace create` (or `herdr worktree create`), then tab/pane split/rename, `pane run` or `agent start` from the selected profile. Worktree Save also fast-forwards the new checkout onto the latest base.
 
 ## Conventions & Patterns
 

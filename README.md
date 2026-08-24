@@ -1,11 +1,11 @@
 # herdr-workspace
 
-A [Herdr](https://herdr.dev) plugin that creates a workspace and applies a
-**layout profile** from a centered popup.
+A [Herdr](https://herdr.dev) plugin that creates a workspace **or Git worktree**
+and applies a **layout profile** from a centered popup.
 
-Bind an action, fill in a directory and name, pick a profile card, Save.
-Herdr gets a new workspace whose tabs, pane splits, pane names, and startup
-commands come from the plugin config.
+Bind an action, fill in the form, pick a profile card, Save. Herdr gets a new
+workspace whose tabs, pane splits, pane names, and startup commands come from
+the plugin config.
 
 ```
 ┌─ New workspace ──────────────────────────────────────────────────────┐
@@ -65,6 +65,12 @@ key = "prefix+shift+n"
 type = "plugin_action"
 command = "herdr-workspace.open"
 description = "New workspace from layout profile"
+
+[[keys.command]]
+key = "prefix+shift+w"
+type = "plugin_action"
+command = "herdr-workspace.worktree"
+description = "New worktree from layout profile"
 ```
 
 ```bash
@@ -84,6 +90,20 @@ herdr server reload-config
    the selected profile.
 
 `Esc` is Cancel.
+
+## Worktree popup
+
+`herdr-workspace.worktree` runs in the **already open** git workspace. It
+creates a linked worktree instead of a brand-new directory:
+
+1. **Branch** — new branch name (`feature/foo`).
+2. **Base ref** — type to fuzzy-search local branches, remotes, and tags.
+   `Tab` accepts a suggestion. Defaults to `origin/main` when that exists.
+3. **Profiles** — same cards as New workspace.
+4. **Save** calls `herdr worktree create`, applies the profile, then fetches
+   and fast-forwards the new checkout onto the latest base.
+
+The new workspace label is the branch name.
 
 ## Layout profiles
 
@@ -126,9 +146,13 @@ Herdr actions run on the server with **no TTY**, so the form cannot run in
 the action itself:
 
 1. `herdr-workspace.open` opens the centered `form` popup (`placement = "popup"`).
-2. Inside the popup, `herdr-workspace form` draws a ratatui form, then on Save
-   calls `herdr workspace create`, `tab create` / `tab rename`, `pane split`,
-   `pane rename`, then `pane run` or `agent start`.
+   `herdr-workspace.worktree` opens the `worktree` popup instead.
+2. Inside the popup, the binary draws a ratatui form. Save for a workspace
+   calls `herdr workspace create`; Save for a worktree calls
+   `herdr worktree create --workspace <current> --branch … --base …`. Then
+   `tab create` / `tab rename`, `pane split`, `pane rename`, `pane run` or
+   `agent start`. A worktree Save also `git fetch`es and fast-forwards onto
+   the chosen base.
 3. The popup closes on Cancel, Esc, or after a successful Save.
 
 ## Changelog

@@ -3,7 +3,7 @@
 use crate::apply;
 use crate::complete;
 use crate::config::{self, Profile};
-use crate::herdr;
+use crate::popup;
 use crate::theme::Theme;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{
@@ -15,8 +15,9 @@ use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use std::io::{self, stdout, Stdout};
 use std::time::Duration;
@@ -31,74 +32,7 @@ enum Focus {
 }
 
 pub fn run() -> i32 {
-    let mut agent_starts = Vec::new();
-    let code = match run_inner(&mut agent_starts) {
-        Ok(code) => code,
-        Err(e) => {
-            eprintln!("herdr-workspace: {e}");
-            1
-        }
-    };
-    // Closing the popup kills this process. Hand agent starts to a detached
-    // child first so later tabs (build, review, …) still launch.
-    if !agent_starts.is_empty() {
-        if let Err(e) = spawn_start_agents(&agent_starts) {
-            eprintln!("herdr-workspace: {e}");
-        }
-    }
-    close_popup();
-    code
-}
-
-fn spawn_start_agents(jobs: &[Vec<String>]) -> Result<(), String> {
-    use std::process::{Command, Stdio};
-    let path = std::env::temp_dir().join(format!(
-        "herdr-workspace-agents-{}.json",
-        std::process::id()
-    ));
-    let payload = serde_json::to_vec(jobs).map_err(|e| format!("encode agent jobs: {e}"))?;
-    std::fs::write(&path, payload).map_err(|e| format!("write {}: {e}", path.display()))?;
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let log = std::env::temp_dir().join("herdr-workspace-agents.log");
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log)
-        .map_err(|e| format!("open {}: {e}", log.display()))?;
-    // Ignore SIGHUP in this process so the child is not killed in the
-    // window between fork and setsid when the popup closes.
-    #[cfg(unix)]
-    unsafe {
-        libc::signal(libc::SIGHUP, libc::SIG_IGN);
-    }
-    let mut cmd = Command::new(&exe);
-    cmd.arg("start-agents")
-        .arg(&path)
-        .stdin(Stdio::null())
-        .stdout(log_file.try_clone().map_err(|e| e.to_string())?)
-        .stderr(log_file);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::signal(libc::SIGHUP, libc::SIG_IGN);
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-    cmd.spawn().map_err(|e| format!("spawn start-agents: {e}"))?;
-    Ok(())
-}
-
-fn close_popup() {
-    let pane = std::env::var("HERDR_PANE_ID").unwrap_or_default();
-    if !pane.is_empty() {
-        let _ = herdr::run(["plugin", "pane", "close", pane.as_str()]);
-    }
+    popup::run(run_inner)
 }
 
 fn run_inner(agent_starts: &mut Vec<Vec<String>>) -> Result<i32, String> {
@@ -123,18 +57,16 @@ fn app_loop(
     agent_starts: &mut Vec<Vec<String>>,
 ) -> Result<i32, String> {
     loop {
-        terminal
-            .draw(|f| app.draw(f))
-            .map_err(|e| e.to_string())?;
+        terminal.draw(|f| app.draw(f)).map_err(|e| e.to_string())?;
         if event::poll(Duration::from_millis(200)).map_err(io_err)? {
             match event::read().map_err(io_err)? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    if let Some(code) = app.on_key(key.code, key.modifiers, agent_starts) {
+                    if let Some(code) = app.on_key(key.code, key.modifiers) {
                         return Ok(code);
                     }
                 }
                 Event::Mouse(mouse) => {
-                    if let Some(code) = app.on_mouse(mouse, agent_starts) {
+                    if let Some(code) = app.on_mouse(mouse) {
                         return Ok(code);
                     }
                 }
@@ -142,6 +74,7 @@ fn app_loop(
                 _ => {}
             }
         }
+        app.poll_job(agent_starts);
         if app.done {
             return Ok(app.exit_code);
         }
@@ -165,7 +98,7 @@ struct App {
     profile_idx: usize,
     focus: Focus,
     error: String,
-    saving: bool,
+    job: Option<apply::SaveJob>,
     done: bool,
     exit_code: i32,
     // hit boxes from last draw
@@ -203,7 +136,7 @@ impl App {
             profile_idx: 0,
             focus: Focus::Dir,
             error: String::new(),
-            saving: false,
+            job: None,
             done: false,
             exit_code: 0,
             dir_box: Rect::default(),
@@ -224,13 +157,8 @@ impl App {
         }
     }
 
-    fn on_key(
-        &mut self,
-        code: KeyCode,
-        mods: KeyModifiers,
-        agent_starts: &mut Vec<Vec<String>>,
-    ) -> Option<i32> {
-        if self.saving {
+    fn on_key(&mut self, code: KeyCode, mods: KeyModifiers) -> Option<i32> {
+        if self.job.is_some() {
             return None;
         }
         if code == KeyCode::Esc {
@@ -241,7 +169,7 @@ impl App {
             Focus::Name => self.key_name(code, mods),
             Focus::Profile => self.key_profile(code),
             Focus::Cancel => self.key_cancel(code, mods),
-            Focus::Save => self.key_save(code, mods, agent_starts),
+            Focus::Save => self.key_save(code, mods),
         }
     }
 
@@ -334,7 +262,11 @@ impl App {
         let cols = self.card_cols.max(1);
         match code {
             KeyCode::Left | KeyCode::BackTab => {
-                self.profile_idx = if self.profile_idx == 0 { n - 1 } else { self.profile_idx - 1 };
+                self.profile_idx = if self.profile_idx == 0 {
+                    n - 1
+                } else {
+                    self.profile_idx - 1
+                };
             }
             KeyCode::Right | KeyCode::Tab => {
                 self.profile_idx = (self.profile_idx + 1) % n;
@@ -379,20 +311,11 @@ impl App {
         }
     }
 
-    fn key_save(
-        &mut self,
-        code: KeyCode,
-        _mods: KeyModifiers,
-        agent_starts: &mut Vec<Vec<String>>,
-    ) -> Option<i32> {
+    fn key_save(&mut self, code: KeyCode, _mods: KeyModifiers) -> Option<i32> {
         match code {
             KeyCode::Enter | KeyCode::Char(' ') => {
-                self.save(agent_starts);
-                if self.done {
-                    Some(self.exit_code)
-                } else {
-                    None
-                }
+                self.save();
+                None
             }
             KeyCode::Left | KeyCode::BackTab => {
                 self.focus = Focus::Cancel;
@@ -465,7 +388,7 @@ impl App {
         self.focus = Focus::Profile;
     }
 
-    fn save(&mut self, agent_starts: &mut Vec<Vec<String>>) {
+    fn save(&mut self) {
         if !self.dir_committed {
             self.commit_dir();
         }
@@ -479,28 +402,36 @@ impl App {
             self.error = "select a profile".into();
             return;
         };
-        let cwd = complete::expand_user(self.dir.trim());
-        self.saving = true;
-        self.error = format!("creating workspace `{}`…", self.name);
-        match apply::apply(&cwd.to_string_lossy(), self.name.trim(), &profile) {
-            Ok(result) => {
-                agent_starts.extend(result.agent_starts);
-                self.done = true;
-                self.exit_code = 0;
-            }
-            Err(e) => {
-                self.saving = false;
-                self.error = e;
+        let cwd = complete::expand_user(self.dir.trim())
+            .to_string_lossy()
+            .into_owned();
+        let name = self.name.trim().to_string();
+        self.error.clear();
+        self.job = Some(apply::SaveJob::spawn(move |on_progress| {
+            apply::apply_with_progress(&mut apply::HerdrCli, &cwd, &name, &profile, on_progress)
+        }));
+    }
+
+    fn poll_job(&mut self, agent_starts: &mut Vec<Vec<String>>) {
+        let Some(job) = self.job.as_mut() else {
+            return;
+        };
+        job.poll();
+        if let Some(result) = job.take_done() {
+            self.job = None;
+            match result {
+                Ok(r) => {
+                    agent_starts.extend(r.agent_starts);
+                    self.done = true;
+                    self.exit_code = 0;
+                }
+                Err(e) => self.error = e,
             }
         }
     }
 
-    fn on_mouse(
-        &mut self,
-        mouse: MouseEvent,
-        agent_starts: &mut Vec<Vec<String>>,
-    ) -> Option<i32> {
-        if self.saving {
+    fn on_mouse(&mut self, mouse: MouseEvent) -> Option<i32> {
+        if self.job.is_some() {
             return None;
         }
         let pos = Position::new(mouse.column, mouse.row);
@@ -522,10 +453,7 @@ impl App {
                     return Some(0);
                 }
                 if self.save_box.contains(pos) {
-                    self.save(agent_starts);
-                    if self.done {
-                        return Some(self.exit_code);
-                    }
+                    self.save();
                 }
             }
             _ => {}
@@ -541,14 +469,14 @@ impl App {
         // Herdr's popup already draws the title and outer border. Fill the
         // whole terminal so we don't nest another "New workspace" frame.
         let area = f.area();
+        if let Some(job) = self.job.as_ref() {
+            draw_progress(f, area, &self.theme, job.progress());
+            return;
+        }
         f.render_widget(Clear, area);
         f.render_widget(Block::default().style(self.theme.base()), area);
 
-        let inner = Layout::vertical([
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(area);
+        let inner = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
         let body = pad(inner[0], 1, 2);
         f.render_widget(
             Paragraph::new(Span::styled(
@@ -573,7 +501,14 @@ impl App {
         .split(body);
 
         self.dir_box = chunks[0];
-        self.draw_input(f, chunks[0], "Directory", &self.dir, self.focus == Focus::Dir, "");
+        self.draw_input(
+            f,
+            chunks[0],
+            "Directory",
+            &self.dir,
+            self.focus == Focus::Dir,
+            "",
+        );
         if self.show_suggestions() {
             self.draw_suggestions(f, chunks[1]);
         }
@@ -600,7 +535,9 @@ impl App {
         self.draw_buttons(f, chunks[7]);
 
         match self.focus {
-            Focus::Dir => f.set_cursor_position(cursor_in_input(self.dir_box, self.dir.chars().count())),
+            Focus::Dir => {
+                f.set_cursor_position(cursor_in_input(self.dir_box, self.dir.chars().count()))
+            }
             Focus::Name => {
                 f.set_cursor_position(cursor_in_input(self.name_box, self.name.chars().count()))
             }
@@ -608,7 +545,15 @@ impl App {
         }
     }
 
-    fn draw_input(&self, f: &mut Frame, area: Rect, title: &str, value: &str, focused: bool, placeholder: &str) {
+    fn draw_input(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        title: &str,
+        value: &str,
+        focused: bool,
+        placeholder: &str,
+    ) {
         let block = Block::bordered()
             .borders(Borders::ALL)
             .title(format!(" {title} "))
@@ -630,7 +575,10 @@ impl App {
     fn draw_suggestions(&self, f: &mut Frame, area: Rect) {
         if self.suggestions.is_empty() {
             f.render_widget(
-                Paragraph::new(Span::styled("  no matching directories", self.theme.muted())),
+                Paragraph::new(Span::styled(
+                    "  no matching directories",
+                    self.theme.muted(),
+                )),
                 area,
             );
             return;
@@ -656,9 +604,8 @@ impl App {
         let cols = card_columns(area.width, n);
         self.card_cols = cols;
         let rows = n.div_ceil(cols);
-        let row_constraints: Vec<Constraint> = (0..rows)
-            .map(|_| Constraint::Length(CARD_HEIGHT))
-            .collect();
+        let row_constraints: Vec<Constraint> =
+            (0..rows).map(|_| Constraint::Length(CARD_HEIGHT)).collect();
         let row_rects = Layout::vertical(row_constraints).spacing(1).split(area);
 
         self.card_boxes = Vec::with_capacity(n);
@@ -726,11 +673,11 @@ impl App {
     }
 }
 
-const CARD_WIDTH: u16 = 22;
-const CARD_HEIGHT: u16 = 5;
+pub(crate) const CARD_WIDTH: u16 = 22;
+pub(crate) const CARD_HEIGHT: u16 = 5;
 const CARD_COLS_MAX: usize = 4;
 
-fn card_columns(width: u16, n: usize) -> usize {
+pub(crate) fn card_columns(width: u16, n: usize) -> usize {
     if n == 0 {
         return 1;
     }
@@ -739,7 +686,7 @@ fn card_columns(width: u16, n: usize) -> usize {
     by_width.min(n).min(CARD_COLS_MAX)
 }
 
-fn cards_area_height(width: u16, n: usize) -> u16 {
+pub(crate) fn cards_area_height(width: u16, n: usize) -> u16 {
     if n == 0 {
         return 1;
     }
@@ -748,7 +695,7 @@ fn cards_area_height(width: u16, n: usize) -> u16 {
     rows * CARD_HEIGHT + rows.saturating_sub(1)
 }
 
-fn pad(area: Rect, v: u16, h: u16) -> Rect {
+pub(crate) fn pad(area: Rect, v: u16, h: u16) -> Rect {
     let chunks = Layout::vertical([
         Constraint::Length(v),
         Constraint::Min(1),
@@ -764,7 +711,56 @@ fn pad(area: Rect, v: u16, h: u16) -> Rect {
     mid[1]
 }
 
-fn cursor_in_input(area: Rect, chars: usize) -> Position {
+pub(crate) fn draw_progress(f: &mut Frame, area: Rect, theme: &Theme, progress: &apply::Progress) {
+    f.render_widget(Clear, area);
+    f.render_widget(Block::default().style(theme.base()), area);
+    let body = pad(area, 2, 4);
+    let chunks = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(3),
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(body);
+    f.render_widget(
+        Paragraph::new(Span::styled("Working", theme.input(true))),
+        chunks[0],
+    );
+    let ratio = if progress.total == 0 {
+        0.0
+    } else {
+        (progress.current as f64 / progress.total as f64).clamp(0.0, 1.0)
+    };
+    f.render_widget(
+        Gauge::default()
+            .block(
+                Block::bordered()
+                    .borders(Borders::ALL)
+                    .title(" Progress ")
+                    .border_style(theme.input_border(true))
+                    .style(theme.base()),
+            )
+            .gauge_style(Style::default().fg(theme.accent).bg(theme.surface))
+            .ratio(ratio)
+            .label(format!("{} / {}", progress.current, progress.total)),
+        chunks[1],
+    );
+    f.render_widget(
+        Paragraph::new(Span::styled(progress.label.as_str(), theme.muted()))
+            .wrap(Wrap { trim: true }),
+        chunks[3],
+    );
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            "  applying layout — popup closes when this finishes",
+            theme.muted(),
+        )),
+        chunks[4],
+    );
+}
+
+pub(crate) fn cursor_in_input(area: Rect, chars: usize) -> Position {
     let inner_x = area.x.saturating_add(1);
     let inner_y = area.y.saturating_add(1);
     let inner_w = area.width.saturating_sub(2);
@@ -823,7 +819,11 @@ mod tests {
         app.refresh_suggestions();
         app.focus = Focus::Dir;
         assert!(complete::is_existing_dir(&app.dir));
-        assert!(app.suggestions.iter().any(|s| s.ends_with("beta/")), "{:?}", app.suggestions);
+        assert!(
+            app.suggestions.iter().any(|s| s.ends_with("beta/")),
+            "{:?}",
+            app.suggestions
+        );
         app.suggest_idx = app
             .suggestions
             .iter()

@@ -8,7 +8,7 @@ id = "herdr-workspace"
 name = "Herdr Workspace"
 version = "0.1.1"
 min_herdr_version = "0.8.0"
-description = "Create a workspace from a centered popup and apply a configured layout profile (tabs, pane splits, names, startup commands)."
+description = "Create a workspace or Git worktree from a centered popup and apply a configured layout profile (tabs, pane splits, names, startup commands)."
 platforms = ["linux", "macos"]
 
 # On `herdr plugin install`, download the prebuilt binary for this platform
@@ -23,6 +23,12 @@ title = "New workspace from layout profile"
 contexts = ["workspace"]
 command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-workspace\" open"]
 
+[[actions]]
+id = "worktree"
+title = "New worktree from layout profile"
+contexts = ["workspace"]
+command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-workspace\" open-worktree"]
+
 # Centered modal form. herdr actions have no TTY; this pane does.
 [[panes]]
 id = "form"
@@ -32,6 +38,14 @@ width = "70%"
 height = "48%"
 command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-workspace\" form"]
 
+[[panes]]
+id = "worktree"
+title = "New worktree"
+placement = "popup"
+width = "70%"
+height = "48%"
+command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-workspace\" worktree"]
+
 # herdr does NOT bind keys declared in a plugin manifest. Bind a key in
 # ~/.config/herdr/config.toml, then `herdr server reload-config`:
 #
@@ -40,3 +54,9 @@ command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-workspace\" form"]
 #   type = "plugin_action"
 #   command = "herdr-workspace.open"
 #   description = "New workspace from layout profile"
+#
+#   [[keys.command]]
+#   key = "prefix+shift+w"
+#   type = "plugin_action"
+#   command = "herdr-workspace.worktree"
+#   description = "New worktree from layout profile"

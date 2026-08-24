@@ -124,7 +124,9 @@ fn herdr_config_path() -> PathBuf {
             return PathBuf::from(p);
         }
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"));
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"));
     home.join(".config/herdr/config.toml")
 }
 
@@ -160,10 +162,7 @@ pub fn parse_color(raw: &str) -> Option<Color> {
     if let Some(hex) = s.strip_prefix('#') {
         return parse_hex(hex);
     }
-    if let Some(inner) = s
-        .strip_prefix("rgb(")
-        .and_then(|t| t.strip_suffix(')'))
-    {
+    if let Some(inner) = s.strip_prefix("rgb(").and_then(|t| t.strip_suffix(')')) {
         let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
         if parts.len() == 3 {
             let r = parts[0].parse().ok()?;
@@ -349,7 +348,10 @@ mod tests {
     fn parses_hex_and_rgb() {
         assert_eq!(parse_color("#1c1c1c"), Some(Color::Rgb(0x1c, 0x1c, 0x1c)));
         assert_eq!(parse_color("#fff"), Some(Color::Rgb(0xff, 0xff, 0xff)));
-        assert_eq!(parse_color("rgb(250, 189, 47)"), Some(Color::Rgb(250, 189, 47)));
+        assert_eq!(
+            parse_color("rgb(250, 189, 47)"),
+            Some(Color::Rgb(250, 189, 47))
+        );
         assert_eq!(parse_color("reset"), Some(Color::Reset));
         assert_eq!(parse_color("cyan"), Some(Color::Cyan));
     }

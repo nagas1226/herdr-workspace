@@ -86,14 +86,20 @@ mod tests {
 
     #[test]
     fn detects_ui_busy() {
-        assert!(popup_busy(r#"{"error":{"code":"ui_busy","message":"settings open"}}"#));
-        assert!(!popup_busy(r#"{"error":{"code":"plugin_not_found","message":"nope"}}"#));
+        assert!(popup_busy(
+            r#"{"error":{"code":"ui_busy","message":"settings open"}}"#
+        ));
+        assert!(!popup_busy(
+            r#"{"error":{"code":"plugin_not_found","message":"nope"}}"#
+        ));
     }
 
     #[test]
     fn detects_agent_name_taken() {
         let stderr = r#"{"error":{"code":"agent_name_taken","message":"agent name reviewer is already used"},"id":"cli:agent:start"}"#;
         assert!(agent_name_taken(stderr));
-        assert!(!agent_name_taken(r#"{"error":{"code":"ui_busy","message":"x"}}"#));
+        assert!(!agent_name_taken(
+            r#"{"error":{"code":"ui_busy","message":"x"}}"#
+        ));
     }
 }
