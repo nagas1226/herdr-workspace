@@ -4,6 +4,40 @@ use std::fs;
 use std::path::PathBuf;
 
 const LIMIT: usize = 8;
+const MAX_FUZZY_DIRS: usize = 20_000;
+
+/// Build a bounded, one-time index of directories below the home directory.
+///
+/// The caller should cache this result. Skipping hidden and well-known build
+/// directories keeps a normal development home responsive while still making
+/// project directories discoverable without an external `fzf` dependency.
+pub fn directory_index() -> Vec<String> {
+    directory_index_from(&home_dir())
+}
+
+/// fzf-like ranking over a directory index. Every whitespace-separated term
+/// must match either as a substring or as an ordered character subsequence.
+pub fn fuzzy_suggestions(index: &[String], query: &str) -> Vec<String> {
+    let terms: Vec<String> = query
+        .split_whitespace()
+        .map(|term| term.to_ascii_lowercase())
+        .filter(|term| !term.is_empty())
+        .collect();
+    if terms.is_empty() {
+        return Vec::new();
+    }
+
+    let mut matches: Vec<(u8, usize, &String)> = index
+        .iter()
+        .filter_map(|path| fuzzy_score(path, &terms).map(|score| (score, path.len(), path)))
+        .collect();
+    matches.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+    matches
+        .into_iter()
+        .take(LIMIT)
+        .map(|(_, _, path)| path.clone())
+        .collect()
+}
 
 pub fn expand_user(input: &str) -> PathBuf {
     if input == "~" {
@@ -118,6 +152,85 @@ fn join_display(display_parent: &str, name: &str) -> String {
     }
 }
 
+fn directory_index_from(root: &PathBuf) -> Vec<String> {
+    let home = home_dir();
+    let mut dirs = Vec::new();
+    let mut pending = vec![root.clone()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if dirs.len() >= MAX_FUZZY_DIRS {
+                return dirs;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if !kind.is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if skip_recursive_dir(name) {
+                continue;
+            }
+            let path = entry.path();
+            dirs.push(display_path(&home, &path));
+            pending.push(path);
+        }
+    }
+    dirs
+}
+
+fn skip_recursive_dir(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(
+            name,
+            ".git" | "Library" | "node_modules" | "target" | "vendor" | "dist" | "build"
+        )
+}
+
+fn display_path(home: &PathBuf, path: &PathBuf) -> String {
+    match path.strip_prefix(home) {
+        Ok(relative) if relative.as_os_str().is_empty() => "~/".into(),
+        Ok(relative) => format!("~/{}", relative.display()),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
+}
+
+fn fuzzy_score(path: &str, terms: &[String]) -> Option<u8> {
+    let lower_path = path.to_ascii_lowercase();
+    let basename = lower_path.rsplit('/').next().unwrap_or(&lower_path);
+    let mut score = 0;
+    for term in terms {
+        let rank = if basename == term {
+            0
+        } else if basename.starts_with(term) {
+            1
+        } else if basename.contains(term) {
+            2
+        } else if lower_path.contains(term) {
+            3
+        } else if is_subsequence(basename, term) {
+            4
+        } else if is_subsequence(&lower_path, term) {
+            5
+        } else {
+            return None;
+        };
+        score = score.max(rank);
+    }
+    Some(score)
+}
+
+fn is_subsequence(haystack: &str, needle: &str) -> bool {
+    let mut chars = haystack.chars();
+    needle.chars().all(|needle| chars.any(|c| c == needle))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,5 +288,18 @@ mod tests {
     fn join_preserves_tilde_display() {
         assert_eq!(join_display("~/", "src"), "~/src/");
         assert_eq!(join_display("/tmp/", "x"), "/tmp/x/");
+    }
+
+    #[test]
+    fn fuzzy_search_ranks_basename_and_subsequence_matches() {
+        let index = vec![
+            "~/Projects/herdr-workspace".into(),
+            "~/Projects/herdr-config".into(),
+            "~/Downloads/archive".into(),
+        ];
+        let got = fuzzy_suggestions(&index, "hws");
+        assert_eq!(got, vec!["~/Projects/herdr-workspace"]);
+        let got = fuzzy_suggestions(&index, "config");
+        assert_eq!(got[0], "~/Projects/herdr-config");
     }
 }

@@ -89,6 +89,9 @@ struct App {
     theme: Theme,
     profiles: Vec<Profile>,
     dir: String,
+    fuzzy_query: String,
+    fuzzy_mode: bool,
+    fuzzy_dirs: Option<Vec<String>>,
     name: String,
     suggestions: Vec<String>,
     suggest_idx: usize,
@@ -123,17 +126,24 @@ impl App {
             dir.push('/');
         }
         let name = complete::default_name_from_dir(&dir);
+        let profile_idx = profiles
+            .iter()
+            .position(|profile| profile.id == "full")
+            .unwrap_or(0);
         let mut app = Self {
             theme,
             profiles,
             dir,
+            fuzzy_query: String::new(),
+            fuzzy_mode: true,
+            fuzzy_dirs: None,
             name,
             suggestions: Vec::new(),
             suggest_idx: 0,
             dir_committed: false,
             name_committed: false,
             name_auto: true,
-            profile_idx: 0,
+            profile_idx,
             focus: Focus::Dir,
             error: String::new(),
             job: None,
@@ -151,7 +161,22 @@ impl App {
     }
 
     fn refresh_suggestions(&mut self) {
-        self.suggestions = complete::suggestions(&self.dir);
+        if self.fuzzy_mode {
+            if self.fuzzy_query.trim().is_empty() {
+                self.suggestions.clear();
+                self.suggest_idx = 0;
+                return;
+            }
+            if self.fuzzy_dirs.is_none() {
+                self.fuzzy_dirs = Some(complete::directory_index());
+            }
+            self.suggestions = complete::fuzzy_suggestions(
+                self.fuzzy_dirs.as_deref().unwrap_or_default(),
+                &self.fuzzy_query,
+            );
+        } else {
+            self.suggestions = complete::suggestions(&self.dir);
+        }
         if self.suggest_idx >= self.suggestions.len() {
             self.suggest_idx = 0;
         }
@@ -174,6 +199,16 @@ impl App {
     }
 
     fn key_dir(&mut self, code: KeyCode, mods: KeyModifiers) -> Option<i32> {
+        if code == KeyCode::Char('f') && mods.contains(KeyModifiers::CONTROL) {
+            self.fuzzy_mode = !self.fuzzy_mode;
+            self.suggest_idx = 0;
+            self.error.clear();
+            self.refresh_suggestions();
+            return None;
+        }
+        if self.fuzzy_mode {
+            return self.key_fuzzy_dir(code, mods);
+        }
         match code {
             KeyCode::Char('j') if mods.contains(KeyModifiers::CONTROL) => self.move_suggest(1),
             KeyCode::Char('k') if mods.contains(KeyModifiers::CONTROL) => self.move_suggest(-1),
@@ -211,6 +246,45 @@ impl App {
             _ => {}
         }
         None
+    }
+
+    fn key_fuzzy_dir(&mut self, code: KeyCode, mods: KeyModifiers) -> Option<i32> {
+        match code {
+            KeyCode::Char('j') if mods.contains(KeyModifiers::CONTROL) => self.move_suggest(1),
+            KeyCode::Char('k') if mods.contains(KeyModifiers::CONTROL) => self.move_suggest(-1),
+            KeyCode::Char('n') if mods.contains(KeyModifiers::CONTROL) => self.move_suggest(1),
+            KeyCode::Char('p') if mods.contains(KeyModifiers::CONTROL) => self.move_suggest(-1),
+            KeyCode::Char(c) if !mods.contains(KeyModifiers::CONTROL) => {
+                self.fuzzy_query.push(c);
+                self.refresh_suggestions();
+            }
+            KeyCode::Backspace => {
+                self.fuzzy_query.pop();
+                self.refresh_suggestions();
+            }
+            KeyCode::Down => self.move_suggest(1),
+            KeyCode::Up => self.move_suggest(-1),
+            KeyCode::Tab => self.accept_fuzzy(false),
+            KeyCode::Enter => self.accept_fuzzy(true),
+            _ => {}
+        }
+        None
+    }
+
+    fn accept_fuzzy(&mut self, commit: bool) {
+        let Some(path) = self.suggestions.get(self.suggest_idx).cloned() else {
+            return;
+        };
+        self.fuzzy_mode = false;
+        self.fuzzy_query.clear();
+        if commit {
+            self.apply_dir(&path);
+        } else {
+            self.dir = complete::accept(&path);
+            self.dir_committed = false;
+            self.name_committed = false;
+            self.refresh_suggestions();
+        }
     }
 
     fn move_suggest(&mut self, delta: i32) {
@@ -334,6 +408,14 @@ impl App {
     }
 
     fn commit_dir(&mut self) {
+        if self.fuzzy_mode {
+            if !self.fuzzy_query.trim().is_empty() && self.suggestions.is_empty() {
+                self.error = "select a matching directory".into();
+                return;
+            }
+            self.fuzzy_mode = false;
+            self.fuzzy_query.clear();
+        }
         if let Some(s) = self.suggestions.get(self.suggest_idx).cloned() {
             self.apply_dir(&complete::accept(&s));
             return;
@@ -462,7 +544,7 @@ impl App {
     }
 
     fn show_suggestions(&self) -> bool {
-        !self.dir_committed
+        self.fuzzy_mode || !self.dir_committed
     }
 
     fn draw(&mut self, f: &mut Frame) {
@@ -480,7 +562,11 @@ impl App {
         let body = pad(inner[0], 1, 2);
         f.render_widget(
             Paragraph::new(Span::styled(
-                "  ctrl+j/k select dir · tab complete · enter next · esc cancel",
+                if self.fuzzy_mode {
+                    "  type to fuzzy-find · ctrl+j/k select · enter choose · ctrl+f back · esc cancel"
+                } else {
+                    "  ctrl+f find directory · ctrl+j/k select dir · tab complete · enter next · esc cancel"
+                },
                 self.theme.muted(),
             )),
             inner[1],
@@ -504,8 +590,16 @@ impl App {
         self.draw_input(
             f,
             chunks[0],
-            "Directory",
-            &self.dir,
+            if self.fuzzy_mode {
+                "Find directory"
+            } else {
+                "Directory"
+            },
+            if self.fuzzy_mode {
+                &self.fuzzy_query
+            } else {
+                &self.dir
+            },
             self.focus == Focus::Dir,
             "",
         );
@@ -536,7 +630,12 @@ impl App {
 
         match self.focus {
             Focus::Dir => {
-                f.set_cursor_position(cursor_in_input(self.dir_box, self.dir.chars().count()))
+                let chars = if self.fuzzy_mode {
+                    self.fuzzy_query.chars().count()
+                } else {
+                    self.dir.chars().count()
+                };
+                f.set_cursor_position(cursor_in_input(self.dir_box, chars))
             }
             Focus::Name => {
                 f.set_cursor_position(cursor_in_input(self.name_box, self.name.chars().count()))
@@ -574,11 +673,13 @@ impl App {
 
     fn draw_suggestions(&self, f: &mut Frame, area: Rect) {
         if self.suggestions.is_empty() {
+            let message = if self.fuzzy_mode && self.fuzzy_query.is_empty() {
+                "  type to search directories under ~/"
+            } else {
+                "  no matching directories"
+            };
             f.render_widget(
-                Paragraph::new(Span::styled(
-                    "  no matching directories",
-                    self.theme.muted(),
-                )),
+                Paragraph::new(Span::styled(message, self.theme.muted())),
                 area,
             );
             return;
@@ -815,6 +916,7 @@ mod tests {
         std::fs::create_dir(tree.path().join("beta")).unwrap();
         let mut app = app();
         app.dir = format!("{}/", tree.path().display());
+        app.fuzzy_mode = false;
         app.name_auto = true;
         app.refresh_suggestions();
         app.focus = Focus::Dir;
