@@ -11,8 +11,7 @@ min_herdr_version = "0.8.0"
 description = "Create a workspace or Git worktree from a centered popup and apply a configured layout profile (tabs, pane splits, names, startup commands)."
 platforms = ["linux", "macos"]
 
-# On `herdr plugin install`, download the prebuilt binary for this platform
-# from the matching GitHub Release into bin/. Skipped by `herdr plugin link`.
+# On `herdr plugin install`, build this fork's source into bin/.
 [[build]]
 command = ["bash", "herdr/install.sh"]
 
