@@ -20,6 +20,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use std::io::{self, stdout, Stdout};
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,7 +59,7 @@ fn app_loop(
 ) -> Result<i32, String> {
     loop {
         terminal.draw(|f| app.draw(f)).map_err(|e| e.to_string())?;
-        if event::poll(Duration::from_millis(200)).map_err(io_err)? {
+        if event::poll(Duration::from_millis(50)).map_err(io_err)? {
             match event::read().map_err(io_err)? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     if let Some(code) = app.on_key(key.code, key.modifiers) {
@@ -74,6 +75,7 @@ fn app_loop(
                 _ => {}
             }
         }
+        app.poll_fuzzy_dirs();
         app.poll_job(agent_starts);
         if app.done {
             return Ok(app.exit_code);
@@ -91,7 +93,9 @@ struct App {
     dir: String,
     fuzzy_query: String,
     fuzzy_mode: bool,
-    fuzzy_dirs: Option<Vec<String>>,
+    fuzzy_dirs: Vec<String>,
+    fuzzy_scan: Receiver<String>,
+    fuzzy_scan_done: bool,
     name: String,
     suggestions: Vec<String>,
     suggest_idx: usize,
@@ -136,7 +140,9 @@ impl App {
             dir,
             fuzzy_query: String::new(),
             fuzzy_mode: true,
-            fuzzy_dirs: None,
+            fuzzy_dirs: Vec::new(),
+            fuzzy_scan: complete::start_directory_scan(),
+            fuzzy_scan_done: false,
             name,
             suggestions: Vec::new(),
             suggest_idx: 0,
@@ -167,18 +173,36 @@ impl App {
                 self.suggest_idx = 0;
                 return;
             }
-            if self.fuzzy_dirs.is_none() {
-                self.fuzzy_dirs = Some(complete::directory_index());
-            }
-            self.suggestions = complete::fuzzy_suggestions(
-                self.fuzzy_dirs.as_deref().unwrap_or_default(),
-                &self.fuzzy_query,
-            );
+            self.suggestions = complete::fuzzy_suggestions(&self.fuzzy_dirs, &self.fuzzy_query);
         } else {
             self.suggestions = complete::suggestions(&self.dir);
         }
         if self.suggest_idx >= self.suggestions.len() {
             self.suggest_idx = 0;
+        }
+    }
+
+    fn poll_fuzzy_dirs(&mut self) {
+        if self.fuzzy_scan_done {
+            return;
+        }
+
+        let mut received = false;
+        for _ in 0..256 {
+            match self.fuzzy_scan.try_recv() {
+                Ok(path) => {
+                    self.fuzzy_dirs.push(path);
+                    received = true;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.fuzzy_scan_done = true;
+                    break;
+                }
+            }
+        }
+        if received && self.fuzzy_mode && !self.fuzzy_query.trim().is_empty() {
+            self.refresh_suggestions();
         }
     }
 
@@ -563,7 +587,7 @@ impl App {
         f.render_widget(
             Paragraph::new(Span::styled(
                 if self.fuzzy_mode {
-                    "  type to fuzzy-find · ctrl+j/k select · enter choose · ctrl+f back · esc cancel"
+                "  type to fuzzy-find · ctrl+j/k select · enter choose · ctrl+f back · esc cancel"
                 } else {
                     "  ctrl+f find directory · ctrl+j/k select dir · tab complete · enter next · esc cancel"
                 },
@@ -674,7 +698,11 @@ impl App {
     fn draw_suggestions(&self, f: &mut Frame, area: Rect) {
         if self.suggestions.is_empty() {
             let message = if self.fuzzy_mode && self.fuzzy_query.is_empty() {
-                "  type to search directories under ~/"
+                if self.fuzzy_scan_done {
+                    "  type to search directories under ~/"
+                } else {
+                    "  indexing ~/ in background — type to search now"
+                }
             } else {
                 "  no matching directories"
             };

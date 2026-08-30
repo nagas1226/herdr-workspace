@@ -2,17 +2,18 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 
 const LIMIT: usize = 8;
 const MAX_FUZZY_DIRS: usize = 20_000;
 
-/// Build a bounded, one-time index of directories below the home directory.
+/// Start indexing directories below the home directory on a worker thread.
 ///
-/// The caller should cache this result. Skipping hidden and well-known build
-/// directories keeps a normal development home responsive while still making
-/// project directories discoverable without an external `fzf` dependency.
-pub fn directory_index() -> Vec<String> {
-    directory_index_from(&home_dir())
+/// Candidates arrive as they are discovered so the form can accept input and
+/// search its partial index immediately. Dropping the receiver stops the scan.
+pub fn start_directory_scan() -> Receiver<String> {
+    start_directory_scan_from(home_dir())
 }
 
 /// fzf-like ranking over a directory index. Every whitespace-separated term
@@ -152,17 +153,23 @@ fn join_display(display_parent: &str, name: &str) -> String {
     }
 }
 
-fn directory_index_from(root: &PathBuf) -> Vec<String> {
-    let home = home_dir();
-    let mut dirs = Vec::new();
-    let mut pending = vec![root.clone()];
+fn start_directory_scan_from(root: PathBuf) -> Receiver<String> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || scan_directories(root, sender));
+    receiver
+}
+
+fn scan_directories(root: PathBuf, sender: Sender<String>) {
+    let home = root.clone();
+    let mut indexed = 0;
+    let mut pending = vec![root];
     while let Some(dir) = pending.pop() {
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
-            if dirs.len() >= MAX_FUZZY_DIRS {
-                return dirs;
+            if indexed >= MAX_FUZZY_DIRS {
+                return;
             }
             let Ok(kind) = entry.file_type() else {
                 continue;
@@ -178,11 +185,13 @@ fn directory_index_from(root: &PathBuf) -> Vec<String> {
                 continue;
             }
             let path = entry.path();
-            dirs.push(display_path(&home, &path));
+            if sender.send(display_path(&home, &path)).is_err() {
+                return;
+            }
+            indexed += 1;
             pending.push(path);
         }
     }
-    dirs
 }
 
 fn skip_recursive_dir(name: &str) -> bool {
@@ -288,6 +297,29 @@ mod tests {
     fn join_preserves_tilde_display() {
         assert_eq!(join_display("~/", "src"), "~/src/");
         assert_eq!(join_display("/tmp/", "x"), "/tmp/x/");
+    }
+
+    #[test]
+    fn streams_directories_as_they_are_indexed() {
+        let tree = setup_tree();
+        std::fs::create_dir(tree.path().join("alpha").join("nested")).unwrap();
+
+        let indexed: Vec<String> = start_directory_scan_from(tree.path().to_path_buf())
+            .iter()
+            .collect();
+
+        assert!(
+            indexed.iter().any(|path| path.ends_with("alpha")),
+            "{indexed:?}"
+        );
+        assert!(
+            indexed.iter().any(|path| path.ends_with("nested")),
+            "{indexed:?}"
+        );
+        assert!(
+            !indexed.iter().any(|path| path.contains(".hidden")),
+            "{indexed:?}"
+        );
     }
 
     #[test]
